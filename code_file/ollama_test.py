@@ -10,6 +10,7 @@ from google.genai import types
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 import time
+from pathlib import Path
 
 load_dotenv()
 
@@ -44,10 +45,20 @@ class SearchQuery(BaseModel): # pydantic로 각 카테고리에 데이터 타입
 
 class ChatBot:
 
-    NETFLIX_CSV_PATH = "/Users/d.h/dev/ai_chatbot/data_file/netflix_titles.csv"
-    DESC_NPY_PATH = "/Users/d.h/dev/ai_chatbot/data_file/netflix_desctiption.npy"
-    PD_PATH = "/Users/d.h/dev/ai_chatbot/data_file/netflix_pd.json"
-    VEC_PATH = "/Users/d.h/dev/ai_chatbot/data_file/netflix_vec.json"
+    BASE_DIR = Path(__file__).resolve().parent.parent
+    OUTPUT_DIR = BASE_DIR / "output"
+    OUTPUT_DIR.mkdir(exist_ok=True)
+
+    #NETFLIX_CSV_PATH = "/Users/d.h/dev/ai_chatbot/data_file/netflix_titles.csv"
+    #DESC_NPY_PATH = "/Users/d.h/dev/ai_chatbot/data_file/netflix_description.npy"
+    #PD_PATH = "/Users/d.h/dev/ai_chatbot/data_file/netflix_pd.json"
+    #VEC_PATH = "/Users/d.h/dev/ai_chatbot/data_file/netflix_vec.json"
+
+    NETFLIX_CSV_PATH = BASE_DIR / "data_file" / "netflix_titles.csv"
+    DESC_NPY_PATH = OUTPUT_DIR / "netflix_description.npy"
+    PD_PATH = OUTPUT_DIR / "netflix_pd.json"
+    VEC_PATH = OUTPUT_DIR / "netflix_vec.json"
+
     API_KEY = os.environ["GEMINI_API_KEY"]
     MODEL = "bge-m3"
     BATCH = 100
@@ -175,7 +186,7 @@ class ChatBot:
         descript_array = np.array(vectors, dtype=np.float32)
         descript_length = descript_array / np.linalg.norm(descript_array, axis=1, keepdims=True)
 
-        np.save(descript_length, ChatBot.DESC_NPY_PATH)
+        np.save(ChatBot.DESC_NPY_PATH, descript_length)
 
         return
 
@@ -219,11 +230,65 @@ class ChatBot:
 
         #top_dict = {}
         #for sid, score in zip():
+        results_1 = []
+        results_2 = []
 
-        results = [results_pd[i] for i in range(len(results_pd)) if results_pd[i]['show_id'] in top_n]
+        if not results_pd:
+            results_1 = [df.iloc[i] for i in range(len(df['show_id'])) if df.loc[i, 'show_id'] in top_n]
+        else:
+            results_2 = [results_pd[i] for i in range(len(results_pd)) if results_pd[i]['show_id'] in top_n]
 
-        print(type(results))
-        print(results)
+        #print(type(results))
+        #print(results)
+        return results_1, results_2
+
+    def answer_with_gemini(self, results_1, results_2):
+        prompt = (
+            f"""
+            사용자가 원하는 영화를 찾고싶어서 입력을 한 결과물이 {results_1}에 저장되어있어.
+            이걸 딕셔너리 형식 그대로 출력하지 말고 넷플릭스 ai 챗봇처럼 깔끔하게 출력을 해줘. 
+            만약 {results_1}과 {results_2} 모두가 비어있다면 찾는 정보가 없다는 식으로 말을 해서
+            다른 입력을 하게 도와줘
+            """
+        )
+
+        client = genai.Client(api_key=ChatBot.API_KEY)
+
+        try:
+            response = client.models.generate_content(
+                model='gemini-3.5-flash',
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0,
+                ),
+            )
+            print(response.text)
+            return
+        
+        except Exception as e:
+            print(f"API Call Failure: {e}")
+            print("60초 대기후 재시도...")
+            time.sleep(61)
+            for i in range(3):
+                try:
+                    response = client.models.generate_content(
+                        model='gemini-3.5-flash',
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            temperature=0,
+                        ),
+                    )
+                    print(response.text)
+                    return
+                except Exception as e:
+                    print(f"API Call Failure: {e}")
+                    print("60초 대기후 재시도...")
+                    time.sleep(61)
+                    continue
+                else:
+                    print("api 요청 성공.")
         
         
 
@@ -249,4 +314,5 @@ if __name__ == "__main__":
             input_length = c.input_embed(user_input)
             c.save_or_load(descript)
             top_n = c.compare_vectors(input_length, ids)
-            c.vec_compare_pd(top_n, df)
+            results_1, results_2 = c.vec_compare_pd(top_n, df)
+            c.answer_with_gemini(results_1, results_2)
