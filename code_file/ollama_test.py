@@ -208,13 +208,22 @@ class ChatBot:
             json.dump(to_dict, f, indent=4, ensure_ascii=False)
 
         top_n = sorted(to_dict, key=to_dict.get, reverse=True)[:10]
+
         return top_n
 
-    def vec_compare_pd(self, top_n):
-        results = df[df['show_id'].isin(top_n)]
+    def vec_compare_pd(self, top_n, df):
+        #results = df[df['show_id'].isin(top_n)]
 
-        for i in results:
-            print(f"{i}\n")
+        with open(ChatBot.PD_PATH, mode="r") as f:
+            results_pd = json.load(f)
+
+        #top_dict = {}
+        #for sid, score in zip():
+
+        results = [results_pd[i] for i in range(len(results_pd)) if results_pd[i]['show_id'] in top_n]
+
+        print(type(results))
+        print(results)
         
         
 
@@ -240,4 +249,4 @@ if __name__ == "__main__":
             input_length = c.input_embed(user_input)
             c.save_or_load(descript)
             top_n = c.compare_vectors(input_length, ids)
-            c.vec_compare_pd(top_n)
+            c.vec_compare_pd(top_n, df)
