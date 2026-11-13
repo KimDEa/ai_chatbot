@@ -1,0 +1,15 @@
+services:
+  chatbot_db:
+    image: postgres:18
+    container_name: ai_chatbot_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin1234
+      POSTGRES_DB: chatbot
+    ports:
+      - "5434:5432"
+    volumes:
+      - chatbot_db_vol:/var/lib/postgresql
+
+volumes:
+  chatbot_db_vol:

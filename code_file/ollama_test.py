@@ -14,7 +14,7 @@ from pathlib import Path
 
 load_dotenv()
 
-class SearchQuery(BaseModel): # pydantic로 각 카테고리에 데이터 타입 규정.
+class SearchQuery(BaseModel): # pydantic으로 각 프로그램 카테고리에 따른 데이터 타입 규정.
     type: str | None = Field(
         description="Movie 또는 TV Show"
     )
@@ -63,10 +63,10 @@ class ChatBot:
     MODEL = "bge-m3"
     BATCH = 100
 
-    def __init__(self): # 생성자 생성
+    def __init__(self):
         pass
     
-    def dataframe(self): # 넷플릭스 csv파일 데이터프레임화, 특정 설명, show_id부분 리스트로 변환후 반환.
+    def dataframe(self): # 넷플릭스 csv파일 데이터프레임화, 줄거리, show_id부분 리스트로 변환.
         df = pd.read_csv(ChatBot.NETFLIX_CSV_PATH)
         df = df.fillna("Unknown")
         descript = df["description"].tolist()
@@ -74,7 +74,7 @@ class ChatBot:
         
         return df, descript, ids
     
-    def call_gemini(self, user_input): # gemini api 호출해서 사용자 입력 카테고리에 맞게 분류.
+    def call_gemini(self, user_input): # gemini api 호출해서 사용자 입력을 카테고리에 맞게 분류.
         genres = sorted(
             df['listed_in'].str.split(',').explode().str.strip().unique()
         )
@@ -91,7 +91,7 @@ class ChatBot:
 
         try:
             response = client.models.generate_content(
-                model='gemini-3.5-flash-lite',
+                model='gemini-3.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
@@ -109,7 +109,7 @@ class ChatBot:
             for i in range(3):
                 try:
                     response = client.models.generate_content(
-                        model='gemini-3.5-flash-lite',
+                        model='gemini-3.5-flash',
                         contents=prompt,
                         config=types.GenerateContentConfig(
                             response_mime_type="application/json",
@@ -128,7 +128,7 @@ class ChatBot:
                 else:
                     print("api 요청 성공.")
 
-    def extract_pd(self, keyword_result): # 각 카테고리에 있는 키워드들을 pandas로 추출후 json형식으로 파일에 저장.
+    def extract_pd(self, keyword_result): # gemini api로 분류된 키워드를 pandas 인덱싱으로 데이터 추출후 json형식으로 파일에 저장.
         df_c = df.copy()
 
         if keyword_result['type']:
@@ -173,7 +173,7 @@ class ChatBot:
             else:
                 return
 
-    def desc_embed(self, descript): # 설명부분 정규화.
+    def desc_embed(self, descript): # 줄거리 부분 정규화.
         vectors = []
         
         for i in range(0, len(descript), ChatBot.BATCH):
@@ -190,7 +190,7 @@ class ChatBot:
 
         return
 
-    def save_or_load(self, descript): # 설명 부분 정규화 데이터 존재 유무 확인 및 데이터 무결성 확인.
+    def save_or_load(self, descript): # 줄거리 부분 정규화 데이터 존재 유무 및 데이터 무결성 확인.
         if os.path.exists(ChatBot.DESC_NPY_PATH):
             saved = np.load(ChatBot.DESC_NPY_PATH)
             print("저장된 정규화 데이터가 존재합니다.")
@@ -207,7 +207,7 @@ class ChatBot:
             make = c.desc_embed(descript)
             return make
 
-    def compare_vectors(self, input_length, ids):
+    def compare_vectors(self, input_length, ids): # 두 정규화 데이터 비교후 딕셔너리 타입으로 변환후 상위 10개만 추출
         saved = np.load(ChatBot.DESC_NPY_PATH)
         compare_results = saved @ input_length
 
@@ -222,7 +222,7 @@ class ChatBot:
 
         return top_n
 
-    def vec_compare_pd(self, top_n, df):
+    def vec_compare_pd(self, top_n, df): # pandas로 뽑은 데이터와 정규화 비교 데이터의 교집합 확인. 교집합 없을 시 정규화 상위 10개를 답변으로 선택.
         #results = df[df['show_id'].isin(top_n)]
 
         with open(ChatBot.PD_PATH, mode="r") as f:
@@ -238,18 +238,32 @@ class ChatBot:
         else:
             results_2 = [results_pd[i] for i in range(len(results_pd)) if results_pd[i]['show_id'] in top_n]
 
+        # 1. top10과 pd_data가 서로 겹치는게 없을때(정확한 데이터가 입력에 없으면 top10이 우선순위)
+        # 2. 사용자가 입력에 정확한 데이터를 명시했는데 top10은 줄거리만 비교해서 뽑은거기 때문에 pd_data가 우선순위?
+        # 3. gemini api 규칙 좀더 명시화 하기(특수문자 안보이게, ex좀더 자연스럽게 다듬기)
+        # 4. db에 show_id, description과 netflix.csv psycopg로 넣어주고 코드와 연결해서 데이터 다루기.
+
         #print(type(results))
         #print(results)
         return results_1, results_2
 
-    def answer_with_gemini(self, results_1, results_2):
+    def answer_with_gemini(self, results_1, results_2): # gemini api로 분류한 넷플릭스 데이터를 ai chatbot 처럼 답변출력.
+        ex = {
+            "영화 제목": "영화제목",
+            "감독": "감독이름",
+            "출연진": "출연진 이름",
+            "국가": "만든 국가 이름",
+            "출시연도": "만든 연도",
+            "평점": "평점",
+            "상영시간": "상영길이",
+            "장르": "장르",
+            "줄거리": "줄거리 짧게"
+        }
+
         prompt = (
-            f"""
-            사용자가 원하는 영화를 찾고싶어서 입력을 한 결과물이 {results_1}에 저장되어있어.
-            이걸 딕셔너리 형식 그대로 출력하지 말고 넷플릭스 ai 챗봇처럼 깔끔하게 출력을 해줘. 
-            만약 {results_1}과 {results_2} 모두가 비어있다면 찾는 정보가 없다는 식으로 말을 해서
-            다른 입력을 하게 도와줘
-            """
+            f"사용자가 원하는 영화를 찾고싶어서 입력을 한 결과물이 {results_1}에 저장되어있어.",
+            f"이걸 {ex}을 참고하는데 딕셔너리 형식 그대로 출력하지 말고 넷플릭스 ai 챗봇처럼 깔끔하게 출력을 해줘.",
+            f"만약 {results_1}과 {results_2} 모두가 비어있다면 찾는 정보가 없다는 식으로 말을 해서 다른 입력을 하게 도와줘"
         )
 
         client = genai.Client(api_key=ChatBot.API_KEY)
@@ -289,16 +303,7 @@ class ChatBot:
                     continue
                 else:
                     print("api 요청 성공.")
-        
-        
 
-# 사용자 입력, 영화 설명부분 ollama로 임베딩후 행 길이 맞추기
-
-# 두 벡터 비교후 상위 N개 추출
-
-# show_id로 두 추출 데이터 교집합 데이터 추출
-
-# gemini api로 ai스럽게 답변
 
 if __name__ == "__main__":
     c = ChatBot()
