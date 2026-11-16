@@ -64,33 +64,28 @@ class ChatBot:
     BATCH = 100
 
     def __init__(self):
-        pass
-    
-    def dataframe(self): # 넷플릭스 csv파일 데이터프레임화, 줄거리, show_id부분 리스트로 변환.
-        df = pd.read_csv(ChatBot.NETFLIX_CSV_PATH)
-        df = df.fillna("Unknown")
-        descript = df["description"].tolist()
-        ids = df["show_id"].tolist()
-        
-        return df, descript, ids
-    
-    def call_gemini(self, user_input): # gemini api 호출해서 사용자 입력을 카테고리에 맞게 분류.
-        genres = sorted(
-            df['listed_in'].str.split(',').explode().str.strip().unique()
+        self.df = pd.read_csv(ChatBot.NETFLIX_CSV_PATH)
+        self.df = self.df.fillna("Unknown")
+        self.descript = self.df['description'].tolist()
+        self.ids = self.df['show_id'].tolist()
+
+        self.genres = sorted(
+            self.df['listed_in'].str.split(',').explode().str.strip().unique()
         )
 
+        self.client = genai.Client(api_key=ChatBot.API_KEY)
+    
+    def call_gemini(self, user_input): # gemini api 호출해서 사용자 입력을 카테고리에 맞게 분류.
         prompt = (
             f"""
             사용자가 찾고싶은 영화나 TV프로그램을 자연어 방식으로 입력하면
             너는 {user_input}을 각 카테고리에 맞는 키워드를 넣어주는 역활이야.
-            장르부분은 {genres}안에 있는 문자열으로만 넣어줘.
+            장르부분은 {self.genres}안에 있는 문자열으로만 넣어줘.
             """
         )
 
-        client = genai.Client(api_key=ChatBot.API_KEY)
-
         try:
-            response = client.models.generate_content(
+            response = self.client.models.generate_content(
                 model='gemini-3.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
@@ -108,7 +103,7 @@ class ChatBot:
             time.sleep(61)
             for i in range(3):
                 try:
-                    response = client.models.generate_content(
+                    response = self.client.models.generate_content(
                         model='gemini-3.5-flash',
                         contents=prompt,
                         config=types.GenerateContentConfig(
@@ -129,7 +124,7 @@ class ChatBot:
                     print("api 요청 성공.")
 
     def extract_pd(self, keyword_result): # gemini api로 분류된 키워드를 pandas 인덱싱으로 데이터 추출후 json형식으로 파일에 저장.
-        df_c = df.copy()
+        df_c = self.df.copy()
 
         if keyword_result['type']:
             df_c = df_c[df_c['type'] == keyword_result['type']]
@@ -168,20 +163,19 @@ class ChatBot:
         else:
             retry = input("사용자 입력 데이터 정규화 오류. 다시 시도 하시겠습니까?(y/n) : ")
             if retry == "y":
-                re = c.input_embed(user_input)
-                return re
+                return c.input_embed(user_input)
             else:
                 return
 
-    def desc_embed(self, descript): # 줄거리 부분 정규화.
+    def desc_embed(self): # 줄거리 부분 정규화.
         vectors = []
         
-        for i in range(0, len(descript), ChatBot.BATCH):
-            batch = descript[i:i + ChatBot.BATCH]
+        for i in range(0, len(self.descript), ChatBot.BATCH):
+            batch = self.descript[i:i + ChatBot.BATCH]
             result = ollama.embed(model=ChatBot.MODEL, input=batch)
             vectors.extend(result["embeddings"])
-            if len(batch) < len(descript):
-                print(f"임베딩중... {len(vectors)} / {len(descript)}")
+            if len(batch) < len(self.descript):
+                print(f"임베딩중... {len(vectors)} / {len(self.descript)}")
 
         descript_array = np.array(vectors, dtype=np.float32)
         descript_length = descript_array / np.linalg.norm(descript_array, axis=1, keepdims=True)
@@ -190,29 +184,27 @@ class ChatBot:
 
         return
 
-    def save_or_load(self, descript): # 줄거리 부분 정규화 데이터 존재 유무 및 데이터 무결성 확인.
+    def save_or_load(self): # 줄거리 부분 정규화 데이터 존재 유무 및 데이터 무결성 확인.
         if os.path.exists(ChatBot.DESC_NPY_PATH):
             saved = np.load(ChatBot.DESC_NPY_PATH)
             print("저장된 정규화 데이터가 존재합니다.")
-            if len(saved) == len(descript) and np.allclose(np.linalg.norm(saved, axis=1, keepdims=True), 1) == True:
+            if len(saved) == len(self.descript) and np.allclose(np.linalg.norm(saved, axis=1, keepdims=True), 1) == True:
                 print("데이터 무결성 테스트 통과.")
             else:
                 retry = input("데이터 정규화 오류. 정규화를 다시 시도 하시겠습니까?(y/n) : ")
                 if retry == "y":
-                    re = c.desc_embed(descript)
-                    return re
+                    return c.desc_embed()
                 else:
                     return
         else:
-            make = c.desc_embed(descript)
-            return make
+            return c.desc_embed()
 
-    def compare_vectors(self, input_length, ids): # 두 정규화 데이터 비교후 딕셔너리 타입으로 변환후 상위 10개만 추출
+    def compare_vectors(self, input_length): # 두 정규화 데이터 비교후 딕셔너리 타입으로 변환후 상위 10개만 추출
         saved = np.load(ChatBot.DESC_NPY_PATH)
         compare_results = saved @ input_length
 
         to_dict = {}
-        for sid, score in zip(ids, compare_results):
+        for sid, score in zip(self.ids, compare_results):
             to_dict[sid] = float(score)
 
         with open(ChatBot.VEC_PATH, mode="w", encoding="utf-8") as f:
@@ -222,21 +214,22 @@ class ChatBot:
 
         return top_n
 
-    def vec_compare_pd(self, top_n, df): # pandas로 뽑은 데이터와 정규화 비교 데이터의 교집합 확인. 교집합 없을 시 정규화 상위 10개를 답변으로 선택.
+    def vec_compare_pd(self, top_n): # pandas로 뽑은 데이터와 정규화 비교 데이터의 교집합 확인. 교집합 없을 시 정규화 상위 10개를 답변으로 선택.
         #results = df[df['show_id'].isin(top_n)]
 
         with open(ChatBot.PD_PATH, mode="r") as f:
             results_pd = json.load(f)
+            #results_pd = json.loads(results_pd)
 
         #top_dict = {}
         #for sid, score in zip():
         results_1 = []
         results_2 = []
+        results_ids = [i['show_id'] for i in results_pd]
 
-        if not results_pd:
-            results_1 = [df.iloc[i] for i in range(len(df['show_id'])) if df.loc[i, 'show_id'] in top_n]
-        else:
-            results_2 = [results_pd[i] for i in range(len(results_pd)) if results_pd[i]['show_id'] in top_n]
+        results_from_topn = [self.df.iloc[i] for i in range(len(self.df['show_id'])) if self.df.loc[i, 'show_id'] in top_n] #top_n의 show_id를 데이터로 뽑은것.
+        results_2 = [self.df.iloc[i] for i in range(len(results_pd)) if results_pd[i]['show_id'] in top_n] # top_n과 results_pd의 교집합 추출
+        # 만약 입력어에서 정확한 키워드가 있으면 results_pd로 답변
 
         # 1. top10과 pd_data가 서로 겹치는게 없을때(정확한 데이터가 입력에 없으면 top10이 우선순위)
         # 2. 사용자가 입력에 정확한 데이터를 명시했는데 top10은 줄거리만 비교해서 뽑은거기 때문에 pd_data가 우선순위?
@@ -261,19 +254,19 @@ class ChatBot:
         }
 
         prompt = (
-            f"사용자가 원하는 영화를 찾고싶어서 입력을 한 결과물이 {results_1}에 저장되어있어.",
-            f"이걸 {ex}을 참고하는데 딕셔너리 형식 그대로 출력하지 말고 넷플릭스 ai 챗봇처럼 깔끔하게 출력을 해줘.",
-            f"만약 {results_1}과 {results_2} 모두가 비어있다면 찾는 정보가 없다는 식으로 말을 해서 다른 입력을 하게 도와줘"
+            f"사용자가 원하는 영화를 찾고싶어서 입력을 한 결과물이 {results_1}이나 {results_2}에 저장되어있어. 둘중 비어있는 않은 리스트의 데이터를 기반으로",
+            f"{ex}의 출력 형식을 참고하는데 딕셔너리 형식 그대로 출력하지 말고 넷플릭스 ai 챗봇처럼 깔끔하게 출력을 해줘.",
+            f"만약 {results_1}과 {results_2} 모두가 비어있다면 찾는 정보가 없다는 식으로 말을 해서 다른 입력을 하게 도와줘",
+            f"만약 모두가 비어있지 않다면 정보가 없을때 메시지는 출력하지 마."
         )
 
         client = genai.Client(api_key=ChatBot.API_KEY)
 
         try:
-            response = client.models.generate_content(
+            response = self.client.models.generate_content(
                 model='gemini-3.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
                     temperature=0,
                 ),
             )
@@ -286,11 +279,10 @@ class ChatBot:
             time.sleep(61)
             for i in range(3):
                 try:
-                    response = client.models.generate_content(
+                    response = self.client.models.generate_content(
                         model='gemini-3.5-flash',
                         contents=prompt,
                         config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
                             temperature=0,
                         ),
                     )
@@ -307,7 +299,6 @@ class ChatBot:
 
 if __name__ == "__main__":
     c = ChatBot()
-    df, descript, ids = c.dataframe()
     while True: # 사용자 입력
         user_input = str(input("user : "))
         if user_input in ["q", "quit", "exit"]:
@@ -317,7 +308,7 @@ if __name__ == "__main__":
             keyword_result = c.call_gemini(user_input)
             c.extract_pd(keyword_result)
             input_length = c.input_embed(user_input)
-            c.save_or_load(descript)
-            top_n = c.compare_vectors(input_length, ids)
-            results_1, results_2 = c.vec_compare_pd(top_n, df)
+            c.save_or_load()
+            top_n = c.compare_vectors(input_length)
+            results_1, results_2 = c.vec_compare_pd(top_n)
             c.answer_with_gemini(results_1, results_2)
