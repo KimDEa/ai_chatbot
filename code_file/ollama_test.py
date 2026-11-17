@@ -86,7 +86,7 @@ class ChatBot:
 
         try:
             response = self.client.models.generate_content(
-                model='gemini-3.5-flash',
+                model='gemini-3.5-flash-lite',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
@@ -104,7 +104,7 @@ class ChatBot:
             for i in range(3):
                 try:
                     response = self.client.models.generate_content(
-                        model='gemini-3.5-flash',
+                        model='gemini-3.5-flash-lite',
                         contents=prompt,
                         config=types.GenerateContentConfig(
                             response_mime_type="application/json",
@@ -214,7 +214,7 @@ class ChatBot:
 
         return top_n
 
-    def vec_compare_pd(self, top_n): # pandas로 뽑은 데이터와 정규화 비교 데이터의 교집합 확인. 교집합 없을 시 정규화 상위 10개를 답변으로 선택.
+    def vec_compare_pd(self, top_n, ketword_result): # pandas로 뽑은 데이터와 정규화 비교 데이터의 교집합 확인. 교집합 없을 시 정규화 상위 10개를 답변으로 선택.
         #results = df[df['show_id'].isin(top_n)]
 
         with open(ChatBot.PD_PATH, mode="r") as f:
@@ -227,7 +227,7 @@ class ChatBot:
         results_2 = []
         results_ids = [i['show_id'] for i in results_pd]
 
-        results_from_topn = [self.df.iloc[i] for i in range(len(self.df['show_id'])) if self.df.loc[i, 'show_id'] in top_n] #top_n의 show_id를 데이터로 뽑은것.
+        results_1 = [self.df.iloc[i] for i in range(len(self.df['show_id'])) if self.df.loc[i, 'show_id'] in top_n] #top_n의 show_id를 데이터로 뽑은것.
         results_2 = [self.df.iloc[i] for i in range(len(results_pd)) if results_pd[i]['show_id'] in top_n] # top_n과 results_pd의 교집합 추출
         # 만약 입력어에서 정확한 키워드가 있으면 results_pd로 답변
 
@@ -236,8 +236,8 @@ class ChatBot:
         # 3. gemini api 규칙 좀더 명시화 하기(특수문자 안보이게, ex좀더 자연스럽게 다듬기)
         # 4. db에 show_id, description과 netflix.csv psycopg로 넣어주고 코드와 연결해서 데이터 다루기.
 
-        #print(type(results))
-        #print(results)
+        print(keyword_result)
+
         return results_1, results_2
 
     def answer_with_gemini(self, results_1, results_2): # gemini api로 분류한 넷플릭스 데이터를 ai chatbot 처럼 답변출력.
@@ -264,7 +264,7 @@ class ChatBot:
 
         try:
             response = self.client.models.generate_content(
-                model='gemini-3.5-flash',
+                model='gemini-3.5-flash-lite',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     temperature=0,
@@ -280,7 +280,7 @@ class ChatBot:
             for i in range(3):
                 try:
                     response = self.client.models.generate_content(
-                        model='gemini-3.5-flash',
+                        model='gemini-3.5-flash-lite',
                         contents=prompt,
                         config=types.GenerateContentConfig(
                             temperature=0,
@@ -310,5 +310,17 @@ if __name__ == "__main__":
             input_length = c.input_embed(user_input)
             c.save_or_load()
             top_n = c.compare_vectors(input_length)
-            results_1, results_2 = c.vec_compare_pd(top_n)
+            results_1, results_2 = c.vec_compare_pd(top_n, keyword_result)
             c.answer_with_gemini(results_1, results_2)
+
+
+# type(movie, tv show) - 무슨 영화 보여줘, 무슨 드라마 보여줘
+# title - 무슨 영화같은 영화 뭐있어?
+# director - 무슨 감독 영화 또 뭐있어?
+# cast - 누구나온 영화, 누구 나온 드라마 보고싶어
+# country - 어느 나라 영화 보고싶어
+# release_year - 몆년도에 나온 어느 영화 뭐있어? 2000년대에 유명했던 영화 뭐있어?
+# rating - 지금 가장 인기있는거 뭐야?
+# duration - 좀 짧은 간단한 영화 보고 싶어
+# listed_in - 호러영화 보고싶어, 로맨스 드라마 뭐있어?
+# description - 이런 내용의 영화 추천해줘
