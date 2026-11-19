@@ -44,7 +44,7 @@ class SearchQuery(BaseModel): # pydantic으로 각 프로그램 카테고리에 
 
 class ChatBot:
     NETFLIX_RAW_PATH = "/Users/d.h/dev/ai_chatbot/data_file/netflix_titles.csv"
-    FILTER_NPY_PATH = "/Users/d.h/dev/ai_chatbot/data_file/netflix_description.npy"
+    DESC_NPY_PATH = "/Users/d.h/dev/ai_chatbot/data_file/netflix_desctiption.npy"
     NORM_PATH = "/Users/d.h/dev/ai_chatbot/data_file/netflix_vec.json"
 
     API_KEY = os.environ["GEMINI_API_KEY"]
@@ -54,6 +54,7 @@ class ChatBot:
     def __init__(self):
         self.df = pd.read_csv(ChatBot.NETFLIX_RAW_PATH)
         self.df = self.df.fillna("Unknown")
+        self.df_desc = self.df['description'].tolist()
         self.ids = self.df["show_id"].tolist()
 
         self.genres = sorted(
@@ -135,6 +136,8 @@ class ChatBot:
             df_c = df_c[df_c['listed_in'].str.contains(l, case=False, na=False)]
 
         filter_results = df_c.to_dict(orient="records")
+
+        #print(filter_results)
         return filter_results
 
     def input_embed(self, user_input):
@@ -152,40 +155,54 @@ class ChatBot:
             else:
                 return
 
-    def filter_embed(self, filter_results): # 필터 결과 정규화.
-        vectors = []
-        
-        for i in range(0, len(filter_results), ChatBot.BATCH):
-            batch = filter_results[i:i + ChatBot.BATCH]
-            result = ollama.embed(model=ChatBot.MODEL, input=batch)
-            vectors.extend(result["embeddings"])
-            if len(batch) < len(filter_results):
-                print(f"임베딩중... {len(vectors)} / {len(filter_results)}")
-
-        filter_array = np.array(vectors, dtype=np.float32)
-        filter_norm = filter_array / np.linalg.norm(filter_array, axis=1, keepdims=True)
-
-        np.save(ChatBot.FILTER_NPY_PATH, filter_norm)
-
-        return
-
-    def save_or_load(self, filter_results): # 줄거리 부분 정규화 데이터 존재 유무 및 데이터 무결성 확인.
-        if os.path.exists(ChatBot.FILTER_NPY_PATH):
-            saved = np.load(ChatBot.FILTER_NPY_PATH)
+    def save_or_load(self): # 줄거리 부분 정규화 데이터 존재 유무 및 데이터 무결성 확인후 줄거리.npy 생성.
+        if os.path.exists(ChatBot.DESC_NPY_PATH):
+            saved = np.load(ChatBot.DESC_NPY_PATH)
             print("저장된 정규화 데이터가 존재합니다.")
-            if len(saved) == len(filter_results) and np.allclose(np.linalg.norm(saved, axis=1, keepdims=True), 1) == True:
+            if len(saved) == len(self.df_desc) and np.allclose(np.linalg.norm(saved, axis=1, keepdims=True), 1) == True:
                 print("데이터 무결성 테스트 통과.")
             else:
-                retry = input("데이터 정규화 오류. 정규화를 다시 시도 하시겠습니까?(y/n) : ")
+                retry = input("데이터 정규화 과정에 오류가 있거나 생성파일이 존재하지 않습니다. 정규화를 다시 시도 하시겠습니까?(y/n) : ")
                 if retry == "y":
-                    return c.filter_embed()
+                    vectors = []
+
+                    for i in range(0, len(self.df_desc), ChatBot.BATCH):
+                        batch = self.df_desc[i:i + ChatBot.BATCH]
+                        results = ollama.embed(model=ChatBot.MODEL, input=batch)
+                        vectors.extend(results['embeddings'])
+                        if len(batch) < len(self.df_desc):
+                            print(f"임베딩중... {len(vectors)} / {len(self.df_desc)}")
+
+                    desc_array = np.array(vectors, dtype=np.float32)
+                    desc_norm = desc_array / np.linalg.norm(desc_array, axis=1, keepdims=True)
+                    np.save(ChatBot.DESC_NPY_PATH, desc_norm)
                 else:
                     return
         else:
-            return c.filter_embed()
+            vectors = []
+
+            for i in range(0, len(self.df_desc), ChatBot.BATCH):
+                batch = self.df_desc[i:i + ChatBot.BATCH]
+                results = ollama.embed(model=ChatBot.MODEL, input=batch)
+                vectors.extend(results['embeddings'])
+                if len(batch) < len(self.df_desc):
+                    print(f"임베딩중... {len(vectors)} / {len(self.df_desc)}")
+
+            desc_array = np.array(vectors, dtype=np.float32)
+            desc_norm = desc_array / np.linalg.norm(desc_array, axis=1, keepdims=True)
+            np.save(ChatBot.DESC_NPY_PATH, desc_norm)
+
+    def filter_embed(self, input_norm): # 필터결과와 줄거리 정규화 데이터의 교집합 데이터 추출.
+        if not filter_results:
+            c.compare_norms(input_norm)
+        else:
+            saved = np.load(ChatBot.DESC_NPY_PATH)
+            filter_norm_intersect = [filter_results[i]['show_id'] for i in range(len(filter_results)) if saved[i] == filter_results[i][f's{i+1}']]
+
+            print(filter_norm_intersect)
 
     def compare_norms(self, input_norm): # 두 정규화 데이터 비교후 딕셔너리 타입으로 변환후 상위 10개만 추출
-        saved = np.load(ChatBot.FILTER_NPY_PATH)
+        saved = np.load(ChatBot.DESC_NPY_PATH)
         compare_results = saved @ input_norm
 
         to_dict = {}
@@ -196,6 +213,8 @@ class ChatBot:
             json.dump(to_dict, f, indent=4, ensure_ascii=False)
 
         top_n = sorted(to_dict, key=to_dict.get, reverse=True)[:10]
+
+        print(top_n)
 
         return top_n
 
@@ -210,7 +229,7 @@ if __name__ == "__main__":
             keyword_result = c.call_gemini(user_input)
             filter_results = c.extract_pd(keyword_result)
             input_norm = c.input_embed(user_input)
-            c.filter_embed(filter_results)
-            c.save_or_load(filter_results)
-            top_n = c.compare_norms(input_norm)
+            filter_desc = c.filter_embed(filter_results)
+            c.save_or_load(filter_desc)
+            #top_n = c.compare_norms(input_norm)
             
