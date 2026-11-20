@@ -45,7 +45,8 @@ class SearchQuery(BaseModel): # pydantic으로 각 프로그램 카테고리에 
 class ChatBot:
     NETFLIX_RAW_PATH = "/Users/d.h/dev/ai_chatbot/data_file/netflix_titles.csv"
     DESC_NPY_PATH = "/Users/d.h/dev/ai_chatbot/data_file/netflix_desctiption.npy"
-    NORM_PATH = "/Users/d.h/dev/ai_chatbot/data_file/netflix_vec.json"
+    NORM_PATH = "/Users/d.h/dev/ai_chatbot/output/netflix_vec.json"
+    PD_PATH = "/Users/d.h/dev/ai_chatbot/output/netflix_pd.json"
 
     API_KEY = os.environ["GEMINI_API_KEY"]
     MODEL = "bge-m3"
@@ -137,6 +138,9 @@ class ChatBot:
 
         filter_results = df_c.to_dict(orient="records")
 
+        with open(ChatBot.PD_PATH, mode="w", encoding="utf-8") as f:
+            json.dump(filter_results, f, indent=4, ensure_ascii=False)
+
         #print(filter_results)
         return filter_results
 
@@ -192,15 +196,6 @@ class ChatBot:
             desc_norm = desc_array / np.linalg.norm(desc_array, axis=1, keepdims=True)
             np.save(ChatBot.DESC_NPY_PATH, desc_norm)
 
-    def filter_embed(self, input_norm): # 필터결과와 줄거리 정규화 데이터의 교집합 데이터 추출.
-        if not filter_results:
-            c.compare_norms(input_norm)
-        else:
-            saved = np.load(ChatBot.DESC_NPY_PATH)
-            filter_norm_intersect = [filter_results[i]['show_id'] for i in range(len(filter_results)) if saved[i] == filter_results[i][f's{i+1}']]
-
-            print(filter_norm_intersect)
-
     def compare_norms(self, input_norm): # 두 정규화 데이터 비교후 딕셔너리 타입으로 변환후 상위 10개만 추출
         saved = np.load(ChatBot.DESC_NPY_PATH)
         compare_results = saved @ input_norm
@@ -212,11 +207,48 @@ class ChatBot:
         with open(ChatBot.NORM_PATH, mode="w", encoding="utf-8") as f:
             json.dump(to_dict, f, indent=4, ensure_ascii=False)
 
-        top_n = sorted(to_dict, key=to_dict.get, reverse=True)[:10]
+        return to_dict
 
-        print(top_n)
+    def filter_embed(self, filter_results, to_dict): # 필터결과와 줄거리 정규화 데이터의 교집합 데이터 추출.
+        '''compare_results = []
+        for i in range(len(filter_results)):
+            for j in to_dict.keys():
+                if filter_results[i]['show_id'] == j:
+                    compare_results.append((j, to_dict[j]))
 
-        return top_n
+        #print(compare_results)
+        top_n = sorted(compare_results, key=lambda x: x[1], reverse=True)[:10]
+        top_df = [self.df.iloc[i] for i in range(len(top_n)) if top_n[i][0] in self.df['show_id']]
+        print(top_df)'''
+
+        #1단계: filter_results에서 작품(딕셔너리)을 하나씩 꺼낸다
+        #2단계: 그 작품의 show_id로 to_dict에서 유사도를 찾는다
+        #3단계: 그 유사도를 작품 딕셔너리에 'score' 같은 새 키로 추가한다
+        #4단계: 모든 작품에 점수가 붙으면, 'score' 기준으로 높은 순 정렬한다
+        #5단계: 앞에서 10개를 자른다
+
+        for s in filter_results:
+            s['score'] = to_dict[s['show_id']]
+
+        print(filter_results)
+    def answer_with_ai(self, top_n):
+        prompt = (
+            f"""
+                pass
+            """
+        )
+
+        try:
+            response = self.client.models.generate_content(
+                model='gemini-3.5-flash-lite',
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0,
+                ),
+            )
+            keyword_result = json.loads(response.text)
+        except Exception as e:
+            print(e)
 
 if __name__ == "__main__":
     c = ChatBot()
@@ -229,7 +261,7 @@ if __name__ == "__main__":
             keyword_result = c.call_gemini(user_input)
             filter_results = c.extract_pd(keyword_result)
             input_norm = c.input_embed(user_input)
-            filter_desc = c.filter_embed(filter_results)
-            c.save_or_load(filter_desc)
-            #top_n = c.compare_norms(input_norm)
+            c.save_or_load()
+            to_list = c.compare_norms(input_norm)
+            c.filter_embed(filter_results, to_list)
             
